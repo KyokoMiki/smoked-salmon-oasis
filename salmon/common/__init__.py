@@ -5,7 +5,6 @@ import sys
 
 import aiohttp
 import click
-from requests import RequestException
 
 from salmon.common.aliases import AliasedCommands  # noqa: F401
 from salmon.common.constants import RE_FEAT  # noqa: F401
@@ -117,10 +116,19 @@ def str_to_int_if_int(string, zpad=False):
     return string
 
 
-async def handle_scrape_errors(task, mute=False):
+async def handle_scrape_errors(task, mute: bool = False):
+    """Handle errors during scraping tasks.
+
+    Args:
+        task: The async task to run.
+        mute: If True, suppress error messages.
+
+    Returns:
+        The task result or None on error.
+    """
     try:
         return await task
-    except (ScrapeError, aiohttp.ClientError, TimeoutError, KeyError, RequestException) as e:
+    except (ScrapeError, aiohttp.ClientError, TimeoutError, KeyError) as e:
         if not mute:
             click.secho(f"Error message: {e}", fg="red", bold=True)
     except Exception as e:
