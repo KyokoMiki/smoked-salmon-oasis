@@ -1,4 +1,5 @@
 [![Build and Publish Docker Image](https://github.com/smokin-salmon/smoked-salmon/actions/workflows/docker-image.yml/badge.svg)](https://github.com/smokin-salmon/smoked-salmon/actions/workflows/docker-image.yml) [![Linting](https://github.com/smokin-salmon/smoked-salmon/actions/workflows/lint.yml/badge.svg?branch=master)](https://github.com/smokin-salmon/smoked-salmon/actions/workflows/lint.yml)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FKyokoMiki%2Fsmoked-salmon-oasis.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FKyokoMiki%2Fsmoked-salmon-oasis?ref=badge_shield)
 
 # 🐟 smoked-salmon  
 
@@ -309,3 +310,7 @@ For bug reports and feature requests, use GitHub Issues. Or use the forums.
 * Originally created by [ligh7s](https://github.com/ligh7s/smoked-salmon). Huge thanks!
 * Further development & maintenance by elghoto, xmoforf, miandru, redusys, kyokomiki and others. Keeping the dream alive.
 * Docker image build workflow and update notification mechanisms heavily inspired from the awesome work of Audionut on his [Upload Assistant tool](https://github.com/Audionut/Upload-Assistant) !
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FKyokoMiki%2Fsmoked-salmon-oasis.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FKyokoMiki%2Fsmoked-salmon-oasis?ref=badge_large)
