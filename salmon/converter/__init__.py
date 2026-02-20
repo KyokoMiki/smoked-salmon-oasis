@@ -26,13 +26,22 @@ def validate_bitrate(ctx, param, value):
     required=True,
     help=f"Bitrate to transcode to ({', '.join(VALID_TRANSCODE_BITRATES)})",
 )
-def transcode(path, bitrate):
-    """Transcode a dir of FLACs into "perfect" MP3"""
-    transcode_folder(path, bitrate)
+async def transcode(path: str, bitrate: str) -> None:
+    """Transcode a dir of FLACs into "perfect" MP3.
+
+    Args:
+        path: Path to the directory containing FLAC files.
+        bitrate: Target bitrate (V0 or 320).
+    """
+    await transcode_folder(path, bitrate)
 
 
 @commandgroup.command()
 @click.argument("path", type=click.Path(exists=True, file_okay=False, resolve_path=True), nargs=1)
-def downconv(path):
-    """Downconvert a dir of 24bit FLACs to 16bit"""
-    convert_folder(path)
+async def downconv(path: str) -> None:
+    """Downconvert a dir of 24bit FLACs to 16bit.
+
+    Args:
+        path: Path to the directory containing 24bit FLAC files.
+    """
+    await convert_folder(path)
