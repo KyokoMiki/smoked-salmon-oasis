@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from typing import Literal
 
 import anyio
 import asyncclick as click
@@ -11,7 +12,12 @@ from salmon.common.files import process_files
 from salmon.errors import InvalidSampleRate
 from salmon.tagger.audio_info import gather_audio_info
 
-COPY_EXTENSIONS = frozenset((".jpg", ".jpeg", ".png", ".pdf", ".txt"))
+BitDepth = Literal[16, 24]
+
+SOX_DEPTH_ARGS: dict[BitDepth, list[str]] = {
+    16: ["-R", "-G", "-b", "16"],
+    24: ["-R", "-G"],
+}
 
 
 class ConvertItem(msgspec.Struct, frozen=True):
@@ -47,7 +53,7 @@ def _resolve_sample_rate(sample_rate: int) -> int:
     raise InvalidSampleRate
 
 
-def _build_output_path(path: str, bit_depth: int, sample_rate: int | None) -> str:
+def _build_output_path(path: str, bit_depth: BitDepth, sample_rate: int | None) -> str:
     """Generate the output directory path based on source path and conversion params.
 
     Args:
@@ -144,7 +150,7 @@ def _copy_extra_files(path: str, new_path: str, convert_srcs: frozenset[str]) ->
 
 async def _convert_audio_files(
     items: list[ConvertItem],
-    bit_depth: int,
+    bit_depth: BitDepth,
 ) -> None:
     """Convert audio files concurrently using sox.
 
@@ -163,9 +169,7 @@ async def _convert_audio_files(
         command = [
             "sox",
             item.src,
-            "-R",
-            "-G",
-            *([] if bit_depth == 24 else ["-b", str(bit_depth)]),
+            *SOX_DEPTH_ARGS[bit_depth],
             item.dst,
             "rate",
             "-v",
@@ -192,7 +196,7 @@ async def _convert_audio_files(
 
 async def convert_folder(
     path: str,
-    bit_depth: int = 16,
+    bit_depth: BitDepth = 16,
     sample_rate: int | None = None,
 ) -> tuple[int | None, str]:
     """Convert a folder of 24-bit FLAC files to the target bit depth.
@@ -220,27 +224,23 @@ async def convert_folder(
     return final_rate or sample_rate, new_path
 
 
-def generate_conversion_description(url: str, sample_rate: int | None) -> str:
+def generate_conversion_description(url: str, sample_rate: int | None, bit_depth: BitDepth = 16) -> str:
     """Generate a BBCode description for the conversion process.
 
     Args:
         url: Source URL for attribution.
         sample_rate: The sample rate used in conversion.
+        bit_depth: Target bit depth (16 or 24).
 
     Returns:
         Formatted description string.
     """
     if sample_rate is None:
         return ""
-    if sample_rate <= 48000:
-        return (
-            f"Encode Specifics: 16 bit {sample_rate / 1000:.01f} kHz\n"
-            f"[b]Source:[/b] {url}\n"
-            f"[b]Transcode process:[/b] "
-            f"[code]sox input.flac -R -G -b 16 output.flac rate -v -L {sample_rate} dither[/code]\n"
-        )
+    depth_args = " ".join(SOX_DEPTH_ARGS[bit_depth])
+    sox_cmd = f"sox input.flac {depth_args} output.flac rate -v -L {sample_rate} dither"
     return (
-        f"Encode Specifics: 24 bit {sample_rate / 1000:.01f} kHz\n"
+        f"Encode Specifics: {bit_depth} bit {sample_rate / 1000:.01f} kHz\n"
         f"[b]Source:[/b] {url}\n"
-        f"[b]Transcode process:[/b] [code]sox input.flac -R -G output.flac rate -v -L {sample_rate} dither[/code]\n"
+        f"[b]Transcode process:[/b] [code]{sox_cmd}[/code]\n"
     )

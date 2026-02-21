@@ -109,7 +109,7 @@ def mqa_test(path: str) -> bool | None:
     """
     if os.path.isfile(path):
         if check_mqa(path):
-            click.secho("MQA syncword present in '{path}'", fg="red", bold=True)
+            click.secho(f"MQA syncword present in '{path}'", fg="red", bold=True)
             raise click.Abort
         else:
             return False
@@ -118,5 +118,5 @@ def mqa_test(path: str) -> bool | None:
             for f in files:
                 if any(f.lower().endswith(ext) for ext in [".mp3", ".flac"]):
                     filepath = os.path.join(root, f)
-                    """ Only check the first file """
+                    # Only check the first file
                     return bool(check_mqa(filepath))

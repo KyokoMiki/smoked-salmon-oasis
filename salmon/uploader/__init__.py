@@ -839,7 +839,7 @@ async def execute_downconversion_tasks(
                 conversion_metadata["encoding"] = "Lossless"
 
             # Generate description for conversion
-            description = generate_conversion_description(base_url, sample_rate)
+            description = generate_conversion_description(base_url, sample_rate, task["target_bitdepth"])
             click.secho(f"  Generated description: {description[:100]}...", fg="blue")
             await check_folder_structure(new_path, conversion_metadata["scene"])
 

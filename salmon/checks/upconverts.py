@@ -118,7 +118,10 @@ async def check_upconvert(filepath: str) -> UpconvertCheckResult:
     if bitdepth == 16:
         raise UpconvertCheckError("This is a 16bit FLAC file.")
 
-    response = await anyio.run_process(["flac", "-ac", filepath], check=False)
+    try:
+        response = await anyio.run_process(["flac", "-ac", filepath], check=False)
+    except FileNotFoundError as e:
+        raise UpconvertCheckError(f"flac binary not found: {e}") from e
     response_text = response.stdout.decode() if response.stdout else ""
 
     wasted_bits_list: list[int] = []
