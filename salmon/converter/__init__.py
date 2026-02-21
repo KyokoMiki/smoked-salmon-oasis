@@ -1,19 +1,10 @@
+from typing import get_args
+
 import asyncclick as click
 
 from salmon.common import commandgroup
 from salmon.converter.downconverting import convert_folder
-from salmon.converter.transcoding import transcode_folder
-
-VALID_TRANSCODE_BITRATES = ["V0", "320"]
-
-
-def validate_bitrate(ctx, param, value):
-    if value.upper() in VALID_TRANSCODE_BITRATES:
-        return value.upper()
-    else:
-        raise click.BadParameter(
-            f"{value} is not a valid bitrate. Valid bitrates are: " + ", ".join(VALID_TRANSCODE_BITRATES)
-        )
+from salmon.converter.transcoding import Bitrate, transcode_folder
 
 
 @commandgroup.command()
@@ -21,12 +12,11 @@ def validate_bitrate(ctx, param, value):
 @click.option(
     "--bitrate",
     "-b",
-    type=click.STRING,
-    callback=validate_bitrate,
+    type=click.Choice(get_args(Bitrate), case_sensitive=False),
     required=True,
-    help=f"Bitrate to transcode to ({', '.join(VALID_TRANSCODE_BITRATES)})",
+    help=f"Bitrate to transcode to ({', '.join(get_args(Bitrate))})",
 )
-async def transcode(path: str, bitrate: str) -> None:
+async def transcode(path: str, bitrate: Bitrate) -> None:
     """Transcode a dir of FLACs into "perfect" MP3.
 
     Args:

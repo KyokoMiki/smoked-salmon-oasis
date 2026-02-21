@@ -7,6 +7,7 @@ import shutil
 import time
 from functools import partial
 from os.path import dirname, join
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import anyio
@@ -354,11 +355,10 @@ async def _open_specs_in_preview(spectrals_path: str) -> None:
     Args:
         spectrals_path: Path to the spectrals directory.
     """
-    args = [
-        "qlmanage",
-        "-p",
-        f"{spectrals_path}/*",
-    ]
+    files = sorted(Path(spectrals_path).glob("*"))
+    if not files:
+        return
+    args = ["qlmanage", "-p", *(str(f) for f in files)]
     await anyio.run_process(args, check=False)
 
 

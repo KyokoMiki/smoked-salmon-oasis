@@ -1,8 +1,9 @@
 import os
 import re
 import shutil
-import tempfile
+import subprocess
 from pathlib import Path
+from typing import Literal
 
 import anyio
 import asyncclick as click
@@ -13,20 +14,17 @@ from mutagen.id3 import APIC, TXXX, Frames
 
 from salmon.common.files import process_files
 
+Bitrate = Literal["V0", "320"]
+
 # LAME encoding presets
-LAME_COMMAND_MAP: dict[str, tuple[str, ...]] = {
-    "V0": ("-V", "0", "--vbr-new"),
-    "320": ("-b", "320", "-h"),
+LAME_COMMAND_MAP: dict[Bitrate, list[str]] = {
+    "V0": ["-V", "0", "--vbr-new"],
+    "320": ["-h", "-b", "320"],
 }
-LAME_OPTIONS = ("--quiet", "--add-id3v2", "--ignore-tag-errors")
-FLAC_DECODE_OPTIONS = ("-Vdsc",)
-ID3V2_VERSION = 4
 
 COPY_EXTENSIONS = frozenset((".jpg", ".jpeg", ".png", ".pdf", ".txt"))
-FLAC_TAGS_NOT_TO_COPY = frozenset(("encoder",))
 FLAC_FOLDER_RE = re.compile(r"\[FLAC.*\]")
 LOSSLESS_FOLDER_RE = re.compile(r"Lossless", flags=re.IGNORECASE)
-LOSSY_EXTENSIONS = frozenset((".mp3", ".m4a", ".ogg", ".opus"))
 
 # Vorbis comment → ID3v2 frame mapping
 VORBIS_TO_ID3_MAP: dict[str, str] = {
@@ -73,7 +71,7 @@ _TOT_MAP: dict[str, frozenset[str]] = {
 # ---------------------------------------------------------------------------
 
 
-def _build_output_path(path: str, bitrate: str) -> str:
+def _build_output_path(path: str, bitrate: Bitrate) -> str:
     """Generate the output directory path for a transcoded release.
 
     Args:
@@ -116,7 +114,7 @@ def _validate_lossless(path: str) -> None:
     for _root, _, files in os.walk(path):
         for f in files:
             ext = os.path.splitext(f)[1].lower()
-            if ext in LOSSY_EXTENSIONS:
+            if ext in {".mp3", ".m4a", ".ogg", ".opus"}:
                 click.secho(f"A lossy file was found in the folder ({f}).", fg="red")
                 raise click.Abort
 
@@ -153,7 +151,7 @@ def _prepare_tags(tags: dict[str, list[str]]) -> dict[str, list[str]]:
         ValueError: If conflicting total values are found.
     """
     # Filter out unwanted tags
-    result = {k: v for k, v in tags.items() if not k.startswith("replaygain") and k not in FLAC_TAGS_NOT_TO_COPY}
+    result = {k: v for k, v in tags.items() if not k.startswith("replaygain") and k != "encoder"}
 
     # Merge track/disc totals into number tags
     for tag, tots in _TOT_MAP.items():
@@ -164,8 +162,15 @@ def _prepare_tags(tags: dict[str, list[str]]) -> dict[str, list[str]]:
             continue
 
         tot_vals: set[int] = set()
+        invalid_entries: list[tuple[str, str]] = []
         for t in used:
-            tot_vals.add(int(result[t][0]))
+            try:
+                tot_vals.add(int(result[t][0]))
+            except ValueError:
+                invalid_entries.append((t, result[t][0]))
+        if invalid_entries:
+            details = ", ".join(f"{name}={value!r}" for name, value in invalid_entries)
+            raise ValueError(f"Non-integer total values for {tag}: {details}")
 
         # Remove total keys
         result = {k: v for k, v in result.items() if k not in used}
@@ -257,7 +262,7 @@ def _copy_tags(tag_dict: dict[str, list[str]], flac_obj: flac.FLAC, mp3_path: Pa
     for pic in flac_obj.pictures:
         mp3_thing.tags.add(APIC(encoding=3, mime=pic.mime, type=pic.type, desc=pic.desc, data=pic.data))
 
-    mp3_thing.save(v1=0, v2_version=ID3V2_VERSION)
+    mp3_thing.save(v1=0, v2_version=4)
 
 
 def _copy_extra_files(path: str, new_path: str) -> None:
@@ -280,8 +285,11 @@ def _copy_extra_files(path: str, new_path: str) -> None:
         shutil.copy(p, out)
 
 
-async def _flac_to_mp3(lame_qual: str, flac_path: str, mp3_path: str) -> None:
-    """Decode a FLAC file and encode it to MP3 via a temp WAV file.
+async def _flac_to_mp3(lame_qual: Bitrate, flac_path: str, mp3_path: str) -> None:
+    """Decode a FLAC file and pipe directly to LAME for MP3 encoding.
+
+    Uses an OS-level pipe to connect flac stdout to lame stdin,
+    avoiding temporary files and keeping data in kernel space.
 
     Args:
         lame_qual: LAME quality setting key (e.g. "V0", "320").
@@ -293,30 +301,65 @@ async def _flac_to_mp3(lame_qual: str, flac_path: str, mp3_path: str) -> None:
     """
     Path(mp3_path).parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-        tmp_path = tmp.name
+    flac_err = b""
+    lame_err = b""
+    flac_rc = 0
+    lame_rc = 0
 
+    read_fd, write_fd = os.pipe()
     try:
-        flac_cmd = ["flac", *FLAC_DECODE_OPTIONS, "-o", tmp_path, flac_path]
-        flac_result = await anyio.run_process(flac_cmd, check=False)
-        if flac_result.returncode != 0:
-            err = flac_result.stderr.decode() if flac_result.stderr else ""
-            if err:
-                click.secho(err, fg="yellow")
-            raise RuntimeError(f"FLAC decoding failed with code {flac_result.returncode}")
+        async with await anyio.open_process(
+            ["flac", "-Vdsc", "-o", "-", flac_path],
+            stdout=write_fd,
+            stderr=subprocess.PIPE,
+        ) as flac_proc:
+            os.close(write_fd)
+            write_fd = -1
 
-        lame_cmd = ["lame", *LAME_COMMAND_MAP[lame_qual], *LAME_OPTIONS, tmp_path, mp3_path]
-        lame_result = await anyio.run_process(lame_cmd, check=False)
-        if lame_result.returncode != 0:
-            raise RuntimeError(lame_result.stderr.decode() if lame_result.stderr else "LAME encoding failed")
+            async with await anyio.open_process(
+                [
+                    "lame",
+                    *LAME_COMMAND_MAP[lame_qual],
+                    "--quiet",
+                    "--add-id3v2",
+                    "--ignore-tag-errors",
+                    "-",
+                    mp3_path,
+                ],
+                stdin=read_fd,
+                stderr=subprocess.PIPE,
+            ) as lame_proc:
+                os.close(read_fd)
+                read_fd = -1
+
+                await lame_proc.wait()
+                if lame_proc.stderr:
+                    lame_err = await lame_proc.stderr.receive()
+                lame_rc = lame_proc.returncode or 0
+
+            await flac_proc.wait()
+            if flac_proc.stderr:
+                flac_err = await flac_proc.stderr.receive()
+            flac_rc = flac_proc.returncode or 0
     finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        if write_fd >= 0:
+            os.close(write_fd)
+        if read_fd >= 0:
+            os.close(read_fd)
+
+    if flac_rc:
+        err = flac_err.decode()
+        if err:
+            click.secho(err, fg="yellow")
+        raise RuntimeError(f"FLAC decoding failed with code {flac_rc}")
+
+    if lame_rc:
+        raise RuntimeError(lame_err.decode() or "LAME encoding failed")
 
 
 async def _transcode_audio_files(
     items: list[TranscodeItem],
-    bitrate: str,
+    bitrate: Bitrate,
 ) -> None:
     """Transcode FLAC files to MP3 concurrently.
 
@@ -344,7 +387,7 @@ async def _transcode_audio_files(
 # ---------------------------------------------------------------------------
 
 
-async def transcode_folder(path: str, bitrate: str) -> str:
+async def transcode_folder(path: str, bitrate: Bitrate) -> str:
     """Transcode a lossless folder to MP3 at the specified bitrate.
 
     Args:
@@ -358,8 +401,16 @@ async def transcode_folder(path: str, bitrate: str) -> str:
     new_path = _build_output_path(path, bitrate)
 
     if os.path.isdir(new_path):
-        click.secho(f"{new_path} already exists.", fg="yellow")
-        return new_path
+        expected_mp3s = {Path(item.dst).name for item in _collect_transcode_items(path, new_path)}
+        existing_files = {f for f in os.listdir(new_path) if f.lower().endswith(".mp3")}
+        if expected_mp3s and expected_mp3s <= existing_files:
+            click.secho(f"{new_path} already exists.", fg="yellow")
+            return new_path
+        click.secho(
+            f"{new_path} exists but appears incomplete, re-transcoding...",
+            fg="yellow",
+        )
+        shutil.rmtree(new_path)
 
     items = _collect_transcode_items(path, new_path)
     _copy_extra_files(path, new_path)
@@ -368,23 +419,20 @@ async def transcode_folder(path: str, bitrate: str) -> str:
     return new_path
 
 
-def generate_transcode_description(url: str, bitrate: str) -> str:
+def generate_transcode_description(url: str, bitrate: Bitrate) -> str:
     """Generate a BBCode description for a transcoded upload.
 
     Args:
         url: URL of the source torrent.
-        bitrate: Target MP3 bitrate label (e.g. "V0", "320").
+        bitrate: Target MP3 bitrate label ("V0" or "320").
 
     Returns:
         BBCode formatted description string.
     """
-    lame_command = {
-        "320": "-h -b 320 --ignore-tag-errors",
-        "V0": "-V 0 --vbr-new --ignore-tag-errors",
-    }[bitrate]
+    lame_command = " ".join(LAME_COMMAND_MAP[bitrate])
 
     return (
         f"[b]Source:[/b] {url}\n"
         f"[b]Transcode process:[/b] "
-        f"[code]flac -dcs -- input.flac | lame -S {lame_command} - output.mp3[/code]\n"
+        f"[code]flac -Vdsc -- input.flac | lame -S {lame_command} --ignore-tag-errors - output.mp3[/code]\n"
     )
