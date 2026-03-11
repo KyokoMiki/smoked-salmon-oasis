@@ -4,27 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish, for example 0.10.1
+        description: Release tag to publish
         required: true
-        type: string
-      name:
-        description: Release title shown in GitHub
-        required: true
-        type: string
-      commit:
-        description: Branch or commit to tag when the tag does not already exist
-        required: false
-        default: master
         type: string
       release_summary:
         description: Optional Markdown summary prepended before generated release notes
         required: false
         type: string
-      prerelease:
-        description: Publish this as a prerelease
-        required: true
-        default: false
-        type: boolean
 
 jobs:
   publish-release:
@@ -33,15 +19,66 @@ jobs:
       contents: write
 
     steps:
-      - name: Publish GitHub release
-        uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b
+      - name: Checkout repository
+        uses: actions/checkout@v6
         with:
-          # Use the repo PAT so the resulting published release event fans out into downstream workflows.
+          ref: master
+          fetch-depth: 0
           token: ${{ secrets.BUMP_VERSION_TOKEN_ACTION }}
-          body: ${{ inputs.release_summary }}
-          commit: ${{ inputs.commit }}
-          generateReleaseNotes: true
-          makeLatest: ${{ inputs.prerelease && 'false' || 'legacy' }}
-          name: ${{ inputs.name }}
-          prerelease: ${{ inputs.prerelease }}
-          tag: ${{ inputs.tag }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Generate release notes via API
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_VERSION_TOKEN_ACTION }}
+        run: |
+          GENERATED=$(gh api repos/${{ github.repository }}/releases/generate-notes \
+            -f tag_name="${{ inputs.tag }}" \
+            -f target_commitish="master" \
+            --jq .body)
+
+          if [ -n "${{ inputs.release_summary }}" ]; then
+            BODY="${{ inputs.release_summary }}"$'\n\n'"${GENERATED}"
+          else
+            BODY="${GENERATED}"
+          fi
+
+          {
+            echo "RELEASE_NOTES<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> $GITHUB_ENV
+          echo "VERSION=${{ inputs.tag }}" >> $GITHUB_ENV
+
+      - name: Update version files
+        run: |
+          PYPROJECT_FILE="pyproject.toml"
+
+          # Prepend new changelog entry and update current version
+          uv run --with tomlkit python -c $'import os, tomlkit\n\nfrom datetime import date\n\nversion = os.environ["VERSION"]\nrelease_date = date.today().strftime("%Y-%m-%d")\nnotes = os.environ["RELEASE_NOTES"]\npath = "src/salmon/data/version.toml"\n\nwith open(path, "r", encoding="utf-8") as f:\n    data = tomlkit.load(f)\n\ndata["current"] = version\n\nentry = tomlkit.table()\nentry.add("version", version)\nentry.add("date", release_date)\nentry.add("notes", tomlkit.string("\\n" + notes + "\\n", multiline=True))\nentry.add(tomlkit.nl())\n\ndata["changelog"].insert(0, entry)\n\nwith open(path, "w", encoding="utf-8") as f:\n    tomlkit.dump(data, f)\n'
+
+          # Update version in pyproject.toml
+          sed -i "s/^version = \".*\"/version = \"${{ env.VERSION }}\"/" "$PYPROJECT_FILE"
+
+          # Regenerate uv.lock to update the package version
+          uv lock
+        env:
+          RELEASE_NOTES: ${{ env.RELEASE_NOTES }}
+
+      - name: Commit and push version update
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/salmon/data/version.toml pyproject.toml uv.lock
+          git commit -m "Update version.toml/pyproject.toml to ${{ env.VERSION }} with changelog"
+          git push origin master
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.tag }}" \
+            --title "${{ inputs.tag }}" \
+            --notes "${{ env.RELEASE_NOTES }}" \
+            --latest

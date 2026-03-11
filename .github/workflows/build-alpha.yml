@@ -4,13 +4,12 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:
 
 jobs:
   build-alpha-image:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
 
     steps:
@@ -24,6 +23,11 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
@@ -54,35 +58,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Move alpha tag to current commit
-        run: |
-          # release-action updates the release entry but does not retarget an existing tag.
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -fa alpha -m "Alpha pre-release for ${GITHUB_SHA}"
-          git push origin refs/tags/alpha --force
-
-      - name: Write alpha release notes
-        run: |
-          cat > alpha-release-notes.md <<EOF
-          Rolling pre-release from \`master\` at commit \`${GITHUB_SHA::7}\`.
-
-          Docker images:
-          - \`ghcr.io/${GITHUB_REPOSITORY,,}:alpha\`
-          - \`ghcr.io/${GITHUB_REPOSITORY,,}:alpha-${GITHUB_SHA::7}\`
-
-          This pre-release is automatically updated on each push to \`master\` and can also be refreshed manually with the \`Build Alpha Image\` workflow.
-          EOF
-
-      - name: Create or update alpha GitHub pre-release
-        uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b
-        with:
-          allowUpdates: true
-          bodyFile: alpha-release-notes.md
-          commit: ${{ github.sha }}
-          makeLatest: false
-          name: Alpha pre-release
-          prerelease: true
-          tag: alpha
-          updateOnlyUnreleased: true
